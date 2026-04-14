@@ -35,7 +35,6 @@ def criar_fatura(token, dados):
     payload = {
         "email": dados["email"],
         "due_date": dados["due_date"].isoformat(),
-        "payable_with": ["pix"],
         "items": [
             {
                 "description": dados["descricao"],
@@ -49,19 +48,22 @@ def criar_fatura(token, dados):
             "email": dados["email"],
         },
         "automatic_pix": {
-            "journey": 4,
+            "journey": dados["journey"],
             "frequency": dados["frequencia"],
             "recurrence_beginning": dados["recurrence_beginning"].isoformat(),
             "contract_number": dados["contract_number"][:35],
         },
     }
+    if dados.get("enviar_payable_with"):
+        payload["payable_with"] = ["pix"]
+
     r = requests.post(
         f"{BASE_URL}/invoices",
         auth=(token, ""),
         json=payload,
         timeout=30,
     )
-    return r
+    return r, payload
 
 
 def main():
@@ -113,6 +115,19 @@ def main():
             value=f"CTR-{date.today().strftime('%Y%m%d')}",
         )
 
+        st.markdown("**⚙️ Opções avançadas (debug)**")
+        journey_label = st.selectbox(
+            "Journey",
+            [
+                "4 - Somente autorização (sem cobrança imediata)",
+                "3 - Cobrança imediata + autorização da recorrência",
+            ],
+            index=0,
+        )
+        enviar_payable_with = st.checkbox(
+            "Enviar payable_with=['pix'] no payload", value=False
+        )
+
         submitted = st.form_submit_button("🚀 Gerar Pix Automático", type="primary")
 
     if not submitted:
@@ -141,14 +156,19 @@ def main():
         "due_date": due_date,
         "recurrence_beginning": recurrence_beginning,
         "contract_number": contract_number.strip() or f"CTR-{cpf_limpo}",
+        "journey": int(journey_label.split(" ")[0]),
+        "enviar_payable_with": enviar_payable_with,
     }
 
     with st.spinner(f"Criando fatura em {parceiro['nome']}..."):
         try:
-            r = criar_fatura(parceiro["token"], dados)
+            r, payload_enviado = criar_fatura(parceiro["token"], dados)
         except requests.RequestException as e:
             st.error(f"Erro de conexão: {e}")
             return
+
+    with st.expander("📤 Payload enviado para iugu (debug)"):
+        st.json(payload_enviado)
 
     if r.status_code >= 400:
         st.error(f"Erro {r.status_code} ao criar fatura")
