@@ -164,27 +164,58 @@ def main():
 
     st.success("✅ Fatura criada com sucesso!")
 
-    col1, col2 = st.columns([1, 1])
-    with col1:
+    st.markdown(f"**Parceiro:** {parceiro['nome']}")
+    st.markdown(f"**Invoice ID:** `{data.get('id')}`")
+    st.markdown(f"**Status:** {data.get('status')}")
+    st.markdown(f"**Valor:** R$ {(data.get('total_cents') or 0)/100:.2f}")
+    if auto.get("receiver_recurrence_id"):
+        st.markdown(f"**Recurrence ID:** `{auto['receiver_recurrence_id']}`")
+
+    auto_qr_img = (
+        auto.get("qrcode")
+        or auto.get("qr_code")
+        or auto.get("qrcode_url")
+        or auto.get("authorization_qrcode")
+    )
+    auto_qr_text = (
+        auto.get("qrcode_text")
+        or auto.get("qr_code_text")
+        or auto.get("emv")
+        or auto.get("authorization_qrcode_text")
+        or auto.get("copy_paste")
+    )
+    auto_url = auto.get("authorization_url") or auto.get("url")
+
+    st.divider()
+    st.subheader("🔁 Pix Automático (autorização da recorrência)")
+    if auto_qr_img or auto_qr_text or auto_url:
+        if auto_qr_img:
+            st.image(auto_qr_img, caption="QR Code - Autorização Pix Automático", width=260)
+        if auto_qr_text:
+            st.markdown("**Código copia e cola (Pix Automático):**")
+            st.code(auto_qr_text, language=None)
+        if auto_url:
+            st.link_button("🔗 Abrir link de autorização", auto_url)
+    else:
+        st.warning(
+            "⚠️ Nenhum QR Code específico de Pix Automático foi retornado pela iugu. "
+            "Veja abaixo o conteúdo completo do objeto `automatic_pix` para identificar "
+            "qual campo usar."
+        )
+        st.json(auto)
+
+    st.divider()
+    with st.expander("📄 Dados do Pix comum (pix.*)"):
         if pix.get("qrcode"):
-            st.image(pix["qrcode"], caption="QR Code Pix", width=260)
-    with col2:
-        st.markdown(f"**Parceiro:** {parceiro['nome']}")
-        st.markdown(f"**Invoice ID:** `{data.get('id')}`")
-        st.markdown(f"**Status:** {data.get('status')}")
-        st.markdown(f"**Valor:** R$ {(data.get('total_cents') or 0)/100:.2f}")
-        st.markdown(f"**Vencimento:** {data.get('due_date')}")
-        if auto.get("receiver_recurrence_id"):
-            st.markdown(f"**Recurrence ID:** `{auto['receiver_recurrence_id']}`")
+            st.image(pix["qrcode"], caption="QR Code Pix comum", width=220)
+        if pix.get("qrcode_text"):
+            st.code(pix["qrcode_text"], language=None)
+        st.json(pix)
 
     if data.get("secure_url"):
-        st.link_button("🔗 Abrir página de pagamento", data["secure_url"])
+        st.link_button("🔗 Abrir página de pagamento iugu", data["secure_url"])
 
-    if pix.get("qrcode_text"):
-        st.markdown("**Código Pix (copia e cola):**")
-        st.code(pix["qrcode_text"], language=None)
-
-    with st.expander("Ver resposta completa da iugu"):
+    with st.expander("🧪 Ver resposta completa da iugu (debug)"):
         st.json(data)
 
 
