@@ -205,23 +205,22 @@ def main():
         "Ao escanear este QR Code, o cliente paga a 1ª parcela e já autoriza "
         "automaticamente a recorrência no mesmo ato."
     )
-    if auto_qr_img or auto_qr_text or auto_url:
+    if auto_qr_img or auto_qr_text:
         if auto_qr_img:
             st.image(auto_qr_img, caption="QR Code - Pix Automático (pagamento + recorrência)", width=260)
         if auto_qr_text:
             st.markdown("**Código copia e cola:**")
             st.code(auto_qr_text, language=None)
-        if auto_url:
-            st.link_button("🔗 Abrir link de pagamento", auto_url)
+        st.info(
+            "📱 Compartilhe **apenas este QR Code / código copia e cola** com o cliente. "
+            "Não envie a página de pagamento da iugu — lá o cliente pode desabilitar a recorrência."
+        )
     else:
         st.warning(
             "⚠️ Nenhum QR Code de Pix Automático foi retornado pela iugu. "
             "Veja abaixo o conteúdo do objeto `automatic_pix`."
         )
         st.json(auto)
-
-    if data.get("secure_url"):
-        st.link_button("🔗 Abrir página de pagamento iugu", data["secure_url"])
 
     with st.expander("🧪 Ver resposta completa da iugu (debug)"):
         st.json(data)
