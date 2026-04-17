@@ -78,7 +78,7 @@ def criar_cliente(token, dados):
 def obter_ou_criar_cliente(token, dados):
     existente = buscar_cliente_por_documento(token, dados["cnpj"])
     if existente:
-        return existente, True
+        return existente, True, None
     r = criar_cliente(token, dados)
     if r.status_code >= 400:
         return None, False, r
@@ -91,6 +91,14 @@ def criar_assinatura(token, customer_id, config, contract_number):
         "plan_identifier": config["plan_identifier"],
         "only_on_charge_success": False,
         "payable_with": "pix",
+        "subitems": [
+            {
+                "description": config["descricao"],
+                "quantity": 1,
+                "price_cents": config["valor_cents"],
+                "recurrent": True,
+            }
+        ],
         "automatic_pix": {
             "journey": 3,
             "frequency": "monthly",
