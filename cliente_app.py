@@ -12,7 +12,6 @@ def carregar_config():
     return {
         "subconta_nome": c["subconta_nome"],
         "token": c["token"],
-        "plan_identifier": c["plan_identifier"],
         "valor_cents": int(c["valor_cents"]),
         "descricao": c["descricao"],
         "titulo": c.get("titulo", "Assinatura"),
@@ -66,12 +65,7 @@ def criar_cliente(token, dados):
             {"name": "endereco", "value": dados["endereco"]},
         ],
     }
-    r = requests.post(
-        f"{BASE_URL}/customers",
-        auth=(token, ""),
-        json=payload,
-        timeout=30,
-    )
+    r = requests.post(f"{BASE_URL}/customers", auth=(token, ""), json=payload, timeout=30)
     return r
 
 
@@ -85,49 +79,35 @@ def obter_ou_criar_cliente(token, dados):
     return r.json().get("id"), False, r
 
 
-def criar_assinatura(token, customer_id, config, contract_number):
+def criar_fatura_automatic_pix(token, customer_id, config, dados, contract_number):
+    hoje = date.today()
+    due = (hoje + timedelta(days=3)).isoformat()
     payload = {
         "customer_id": customer_id,
-        "plan_identifier": config["plan_identifier"],
-        "only_on_charge_success": False,
-        "payable_with": "pix",
-        "subitems": [
+        "email": dados["email"],
+        "due_date": due,
+        "payable_with": ["pix"],
+        "items": [
             {
                 "description": config["descricao"],
                 "quantity": 1,
                 "price_cents": config["valor_cents"],
-                "recurrent": True,
             }
         ],
+        "payer": {
+            "name": dados["nome_completo"],
+            "cpf_cnpj": dados["cnpj"],
+            "email": dados["email"],
+        },
         "automatic_pix": {
             "journey": 3,
             "frequency": "monthly",
-            "recurrence_beginning": (date.today() + timedelta(days=1)).isoformat(),
+            "recurrence_beginning": due,
             "contract_number": contract_number[:35],
         },
     }
-    r = requests.post(
-        f"{BASE_URL}/subscriptions",
-        auth=(token, ""),
-        json=payload,
-        timeout=30,
-    )
+    r = requests.post(f"{BASE_URL}/invoices", auth=(token, ""), json=payload, timeout=30)
     return r
-
-
-def extrair_invoice_id(subscription_data):
-    recents = subscription_data.get("recent_invoices") or []
-    if recents:
-        return recents[0].get("id")
-    return subscription_data.get("active_invoice_id")
-
-
-def consultar_fatura(token, invoice_id):
-    return requests.get(
-        f"{BASE_URL}/invoices/{invoice_id}",
-        auth=(token, ""),
-        timeout=30,
-    )
 
 
 def render_form(config):
@@ -137,7 +117,8 @@ def render_form(config):
     )
     st.caption(
         "Preencha seus dados abaixo. Ao pagar o Pix gerado, sua assinatura é ativada "
-        "automaticamente e as próximas cobranças passam a ser debitadas todo mês."
+        "e as próximas cobranças são debitadas automaticamente todo mês — você não "
+        "precisa gerar outro QR."
     )
 
     with st.form("cadastro_cliente"):
@@ -146,7 +127,7 @@ def render_form(config):
             nome = st.text_input("Qual é o seu nome?*")
             marca = st.text_input("Qual o nome da sua marca?*")
             cnpj = st.text_input("Qual o CNPJ da sua marca?* (só números)")
-            whatsapp = st.text_input("Qual o seu número de WhatsApp?* (só números)")
+            whatsapp = st.text_input("Qual o seu número de WhatsApp?* (só números, com DDD)")
             instagram = st.text_input("Qual o Instagram da sua marca?*")
         with col2:
             sobrenome = st.text_input("Qual é o seu sobrenome?*")
@@ -154,28 +135,22 @@ def render_form(config):
             email = st.text_input("Qual o seu e-mail?*")
             endereco = st.text_input("Qual o endereço da sua loja ou fábrica?*")
 
-        submitted = st.form_submit_button("Gerar Pix", type="primary", use_container_width=True)
+        submitted = st.form_submit_button(
+            "Gerar Pix Automático", type="primary", use_container_width=True
+        )
 
     if not submitted:
         return None
-
     return {
-        "nome": nome,
-        "sobrenome": sobrenome,
-        "marca": marca,
-        "razao_social": razao_social,
-        "cnpj": cnpj,
-        "email": email,
-        "whatsapp": whatsapp,
-        "endereco": endereco,
-        "instagram": instagram,
+        "nome": nome, "sobrenome": sobrenome, "marca": marca,
+        "razao_social": razao_social, "cnpj": cnpj, "email": email,
+        "whatsapp": whatsapp, "endereco": endereco, "instagram": instagram,
     }
 
 
 def validar(form):
     cnpj_limpo = limpar_digitos(form["cnpj"])
     whatsapp_limpo = limpar_digitos(form["whatsapp"])
-
     obrigatorios = [
         form["nome"], form["sobrenome"], form["marca"], form["razao_social"],
         cnpj_limpo, form["email"], whatsapp_limpo, form["endereco"], form["instagram"],
@@ -205,57 +180,46 @@ def validar(form):
 def processar(config, dados):
     with st.spinner("Verificando seu cadastro na iugu..."):
         try:
-            resultado = obter_ou_criar_cliente(config["token"], dados)
+            customer_id, reutilizado, r_cliente = obter_ou_criar_cliente(config["token"], dados)
         except requests.RequestException as e:
             st.error(f"Erro de conexão com a iugu: {e}")
             return
-    customer_id, reutilizado, r_cliente = resultado
+
     if not customer_id:
         st.error("Não foi possível cadastrar seu CNPJ na iugu.")
         try:
             st.json(r_cliente.json())
         except Exception:
-            st.code(r_cliente.text)
+            st.code(r_cliente.text if r_cliente is not None else "")
         return
 
     if reutilizado:
         st.info("🔎 Identificamos seu CNPJ já cadastrado — vamos vincular a fatura ao seu cadastro existente.")
 
-    with st.spinner("Criando sua assinatura..."):
+    with st.spinner("Gerando seu Pix Automático..."):
         try:
-            r_sub = criar_assinatura(
-                config["token"], customer_id, config, f"CTR-{dados['cnpj']}"
+            r_inv = criar_fatura_automatic_pix(
+                config["token"], customer_id, config, dados, f"CTR-{dados['cnpj']}"
             )
         except requests.RequestException as e:
-            st.error(f"Erro ao criar assinatura: {e}")
+            st.error(f"Erro ao gerar fatura: {e}")
             return
 
-    if r_sub.status_code >= 400:
-        st.error("Não foi possível gerar a assinatura. Tente novamente ou entre em contato.")
+    if r_inv.status_code >= 400:
+        st.error("Não foi possível gerar o Pix. Tente novamente ou entre em contato.")
         try:
-            st.json(r_sub.json())
+            st.json(r_inv.json())
         except Exception:
-            st.code(r_sub.text)
+            st.code(r_inv.text)
         return
 
-    subscription = r_sub.json()
-    invoice_id = extrair_invoice_id(subscription)
-
-    data = {}
-    if invoice_id:
-        with st.spinner("Gerando Pix..."):
-            try:
-                r_inv = consultar_fatura(config["token"], invoice_id)
-                if r_inv.status_code < 400:
-                    data = r_inv.json()
-            except requests.RequestException:
-                pass
-
+    data = r_inv.json()
     pix = data.get("pix") or {}
+    auto = data.get("automatic_pix") or {}
     qr_img = pix.get("qrcode")
     qr_text = pix.get("qrcode_text")
 
-    st.success("✅ Pronto! Pague o Pix abaixo para ativar sua assinatura.")
+    st.success("✅ Pix Automático gerado! Pague abaixo para ativar sua assinatura.")
     st.markdown(f"**Valor:** R$ {(data.get('total_cents') or config['valor_cents'])/100:.2f}")
 
     if qr_img:
@@ -263,18 +227,22 @@ def processar(config, dados):
     if qr_text:
         st.markdown("**Pix Copia e Cola:**")
         st.code(qr_text, language=None)
-
     if data.get("secure_url"):
-        st.link_button("Abrir página de pagamento iugu", data["secure_url"], use_container_width=True)
+        st.link_button(
+            "Abrir página de pagamento iugu", data["secure_url"], use_container_width=True
+        )
 
     st.info(
-        "🔁 Ao pagar este QR Code, você autoriza a recorrência automática mensal — "
+        "🔁 Ao pagar este QR Code, você autoriza a recorrência mensal automática — "
         "nas próximas cobranças o valor é debitado direto, sem precisar gerar novo Pix."
     )
 
+    if auto.get("receiver_recurrence_id"):
+        st.caption(f"ID da recorrência: `{auto['receiver_recurrence_id']}`")
+
     if not (qr_img or qr_text or data.get("secure_url")):
         st.warning("Não conseguimos exibir o Pix aqui. Entre em contato com o suporte.")
-        st.json({"pix": pix, "automatic_pix": data.get("automatic_pix") or {}})
+        st.json({"pix": pix, "automatic_pix": auto})
 
 
 def main():
