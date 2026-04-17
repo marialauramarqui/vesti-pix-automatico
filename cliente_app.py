@@ -23,6 +23,17 @@ def limpar_digitos(s):
     return re.sub(r"\D", "", s or "")
 
 
+def separar_ddd(whatsapp_digits):
+    d = whatsapp_digits
+    if len(d) == 13 and d.startswith("55"):
+        d = d[2:]
+    if len(d) == 12 and d.startswith("0"):
+        d = d[1:]
+    if len(d) in (10, 11):
+        return d[:2], d[2:]
+    return "", d
+
+
 def buscar_cliente_por_documento(token, doc):
     r = requests.get(
         f"{BASE_URL}/customers",
@@ -39,11 +50,13 @@ def buscar_cliente_por_documento(token, doc):
 
 
 def criar_cliente(token, dados):
+    ddd, numero = separar_ddd(dados["whatsapp"])
     payload = {
         "name": dados["nome_completo"],
         "email": dados["email"],
         "cpf_cnpj": dados["cnpj"],
-        "phone": dados["whatsapp"],
+        "phone_prefix": ddd,
+        "phone": numero,
         "notes": dados["endereco"],
         "custom_variables": [
             {"name": "marca", "value": dados["marca"]},
@@ -163,6 +176,8 @@ def validar(form):
         return None, "Preencha todos os campos obrigatórios."
     if len(cnpj_limpo) != 14:
         return None, "CNPJ inválido — precisa ter 14 dígitos."
+    if len(whatsapp_limpo) not in (10, 11, 12, 13):
+        return None, "WhatsApp inválido — informe com DDD (ex.: 11999998888)."
     if "@" not in form["email"]:
         return None, "E-mail inválido."
 
