@@ -85,6 +85,14 @@ def criar_subscription(token, customer_id, config):
         "plan_identifier": config["plan_identifier"],
         "only_on_charge_success": False,
         "payable_with": "pix",
+        "subitems": [
+            {
+                "description": config["descricao"],
+                "quantity": 1,
+                "price_cents": config["valor_cents"],
+                "recurrent": True,
+            }
+        ],
     }
     return requests.post(f"{BASE_URL}/subscriptions", auth=(token, ""), json=payload, timeout=30)
 
