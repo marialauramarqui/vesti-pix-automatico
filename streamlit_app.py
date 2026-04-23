@@ -37,22 +37,61 @@ def selecionar_parceiro(parceiros, key):
     return next(p for p in parceiros if p["nome"] == parceiro_nome)
 
 
-def criar_fatura(token, dados):
+def buscar_cliente_por_cpf(token, cpf):
+    params = {"query": cpf, "limit": 20}
+    r = requests.get(
+        f"{BASE_URL}/customers",
+        auth=(token, ""),
+        params=params,
+        timeout=30,
+    )
+    if r.status_code >= 400:
+        return None
+    for c in r.json().get("items") or []:
+        cpf_existente = "".join(filter(str.isdigit, c.get("cpf_cnpj") or ""))
+        if cpf_existente == cpf:
+            return c.get("id")
+    return None
+
+
+def criar_cliente(token, dados):
     payload = {
+        "name": dados["nome"],
         "email": dados["email"],
-        "due_date": dados["due_date"].isoformat(),
-        "items": [
+        "cpf_cnpj": dados["cpf"],
+    }
+    r = requests.post(
+        f"{BASE_URL}/customers",
+        auth=(token, ""),
+        json=payload,
+        timeout=30,
+    )
+    return r, payload
+
+
+def obter_ou_criar_cliente(token, dados):
+    existente = buscar_cliente_por_cpf(token, dados["cpf"])
+    if existente:
+        return existente, True
+    r, _ = criar_cliente(token, dados)
+    if r.status_code >= 400:
+        return None, False
+    return r.json().get("id"), False
+
+
+def criar_assinatura(token, customer_id, dados):
+    payload = {
+        "customer_id": customer_id,
+        "only_on_charge_success": False,
+        "payable_with": "pix",
+        "subitems": [
             {
                 "description": dados["descricao"],
                 "quantity": 1,
                 "price_cents": dados["valor_cents"],
+                "recurrent": True,
             }
         ],
-        "payer": {
-            "name": dados["nome"],
-            "cpf_cnpj": dados["cpf"],
-            "email": dados["email"],
-        },
         "automatic_pix": {
             "journey": dados["journey"],
             "frequency": dados["frequencia"],
@@ -61,12 +100,21 @@ def criar_fatura(token, dados):
         },
     }
     r = requests.post(
-        f"{BASE_URL}/invoices",
+        f"{BASE_URL}/subscriptions",
         auth=(token, ""),
         json=payload,
         timeout=30,
     )
     return r, payload
+
+
+def extrair_invoice_id(subscription_data):
+    invoice_id = (
+        subscription_data.get("recent_invoices", [{}])[0].get("id")
+        if subscription_data.get("recent_invoices")
+        else None
+    )
+    return invoice_id or subscription_data.get("active_invoice_id")
 
 
 def listar_faturas(token, data_inicio, data_fim, limit=30):
@@ -146,7 +194,7 @@ def pagina_gerar(parceiros):
             )
             frequencia_label = st.selectbox(
                 "Frequência",
-                ["Mensal", "Semanal", "Trimestral", "Semestral", "Anual"],
+                ["Diária", "Semanal", "Mensal", "Trimestral", "Semestral", "Anual"],
                 index=0,
             )
             recurrence_beginning = st.date_input(
@@ -177,6 +225,7 @@ def pagina_gerar(parceiros):
         return
 
     freq_map = {
+        "Diária": "daily",
         "Semanal": "weekly",
         "Mensal": "monthly",
         "Trimestral": "quarterly",
@@ -197,31 +246,60 @@ def pagina_gerar(parceiros):
         "journey": 3,
     }
 
-    with st.spinner(f"Criando fatura em {parceiro['nome']}..."):
+    with st.spinner(f"Buscando/criando cliente em {parceiro['nome']}..."):
         try:
-            r, payload_enviado = criar_fatura(parceiro["token"], dados)
+            customer_id, reutilizado = obter_ou_criar_cliente(parceiro["token"], dados)
         except requests.RequestException as e:
-            st.error(f"Erro de conexão: {e}")
+            st.error(f"Erro de conexão com cliente: {e}")
             return
 
-    if r.status_code >= 400:
-        st.error(f"Erro {r.status_code} ao criar fatura")
-        try:
-            st.json(r.json())
-        except Exception:
-            st.code(r.text)
+    if not customer_id:
+        st.error("Não foi possível obter/criar o cliente (verifique CPF/email).")
         return
 
-    data = r.json()
+    if reutilizado:
+        st.info(f"ℹ️ Cliente já existente reaproveitado (ID: `{customer_id}`).")
+
+    with st.spinner(f"Criando assinatura em {parceiro['nome']}..."):
+        try:
+            r_sub, _ = criar_assinatura(parceiro["token"], customer_id, dados)
+        except requests.RequestException as e:
+            st.error(f"Erro de conexão ao criar assinatura: {e}")
+            return
+
+    if r_sub.status_code >= 400:
+        st.error(f"Erro {r_sub.status_code} ao criar assinatura")
+        try:
+            st.json(r_sub.json())
+        except Exception:
+            st.code(r_sub.text)
+        return
+
+    subscription = r_sub.json()
+    subscription_id = subscription.get("id")
+    invoice_id = extrair_invoice_id(subscription)
+
+    data = {}
+    if invoice_id:
+        with st.spinner("Buscando fatura gerada pela iugu..."):
+            try:
+                r_inv = consultar_fatura(parceiro["token"], invoice_id)
+                if r_inv.status_code < 400:
+                    data = r_inv.json()
+            except requests.RequestException:
+                pass
+
     pix = data.get("pix") or {}
     auto = data.get("automatic_pix") or {}
 
-    st.success("✅ Fatura criada com sucesso!")
+    st.success("✅ Assinatura criada e fatura vinculada!")
 
     st.markdown(f"**Parceiro:** {parceiro['nome']}")
-    st.markdown(f"**Invoice ID:** `{data.get('id')}`")
-    st.markdown(f"**Status:** {data.get('status')}")
-    st.markdown(f"**Valor:** R$ {(data.get('total_cents') or 0)/100:.2f}")
+    st.markdown(f"**Customer ID:** `{customer_id}`")
+    st.markdown(f"**Subscription ID:** `{subscription_id}`")
+    st.markdown(f"**Invoice ID:** `{data.get('id') or invoice_id or '—'}`")
+    st.markdown(f"**Status da fatura:** {data.get('status') or '—'}")
+    st.markdown(f"**Valor:** R$ {(data.get('total_cents') or dados['valor_cents'])/100:.2f}")
     if auto.get("receiver_recurrence_id"):
         st.markdown(f"**Recurrence ID:** `{auto['receiver_recurrence_id']}`")
 
